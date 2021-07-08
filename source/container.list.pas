@@ -1,9 +1,9 @@
 (******************************************************************************)
 (*                             libPasC-Algorithms                             *)
-(*       object pascal library of common data structures and algorithms       *)
+(* delphi and object pascal library of  common data structures and algorithms *)
 (*                 https://github.com/fragglet/c-algorithms                   *)
 (*                                                                            *)
-(* Copyright (c) 2020                                       Ivan Semenkov     *)
+(* Copyright (c) 2020 - 2021                                Ivan Semenkov     *)
 (* https://github.com/isemenkov/libpasc-algorithms          ivan@semenkov.pro *)
 (*                                                          Ukraine           *)
 (******************************************************************************)
@@ -24,9 +24,11 @@
 (*                                                                            *)
 (******************************************************************************)
 
-unit list;
+unit container.list;
 
-{$mode objfpc}{$H+}
+{$IFDEF FPC}
+  {$mode objfpc}{$H+}
+{$ENDIF}
 {$IFOPT D+}
   {$DEFINE DEBUG}
 {$ENDIF}
@@ -34,18 +36,23 @@ unit list;
 interface
 
 uses
-  SysUtils;
+  SysUtils, utils.enumerate {$IFDEF USE_OPTIONAL}, utils.optional{$ENDIF}
+  {$IFNDEF FPC}, utils.functor{$ENDIF};
 
 type
+  {$IFNDEF USE_OPTIONAL}
   { List item value not exists. }
   EValueNotExistsException = class(Exception);
+  {$ENDIF}
 
   { Doubly-linked list.
     A doubly-linked list stores a collection of values. Each entry in the list 
     (represented by a pointer a @ref ListEntry structure) contains a link to the 
     next entry and the previous entry. It is therefore possible to iterate over 
     entries in the list in either direction. }
-  generic TList<T> = class
+  {$IFDEF FPC}generic{$ENDIF} TList<T; BinaryCompareFunctor
+    {$IFNDEF FPC}: constructor, utils.functor.TBinaryFunctor<T, 
+    Integer>{$ENDIF}> = class
   protected
     type
       { TList item entry type. }
@@ -58,27 +65,27 @@ type
       end;
   public
     type
-      { Callback function used to determine of two values in a list are equal. 
-        Return a negative value if AValue1 should be sorted before AValue2, a
-        positive value if AValue1 should be sorted after AValue2, zero if
-        AValue1 and AValue2 are equal. }
-      TListEqualCallback = function (AValue1 : T; AValue2 : T) : Integer;
+      {$IFDEF USE_OPTIONAL}
+      TOptionalValue = {$IFDEF FPC}specialize{$ENDIF} TOptional<T>;
+      {$ENDIF}
 
       { TList iterator. }
-      TIterator = class
+      TIterator = class; { Fix for FreePascal compiler. }
+      TIterator = class({$IFDEF FPC}specialize{$ENDIF}
+        TBidirectionalIterator<T, TIterator>)
       protected
         { Create new iterator for list item entry. }
         {%H-}constructor Create (APFirstNode : PPListEntry; APLastNode : 
           PPListEntry; APLength : PLongWord; AItem : PListEntry);
       public
         { Return true if iterator has correct value }
-        function HasValue : Boolean;
+        function HasValue : Boolean; override;
 
         { Retrieve the previous entry in a list. }
-        function Prev : TIterator;
+        function Prev : TIterator; override;
 
         { Retrieve the next entry in a list. }
-        function Next : TIterator;
+        function Next : TIterator; override;
 
         { Remove an entry from a list. }
         procedure Remove;
@@ -88,12 +95,24 @@ type
 
         { Insert new entry in next position. }
         procedure InsertNext (AData : T);
+
+        { Return True if we can move to next element. }
+        function MoveNext : Boolean; override;
+
+        { Return enumerator for in operator. }
+        function GetEnumerator : TIterator; override;
       protected
         { Get item value. }
-        function GetValue : T;
+        function GetValue : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue
+          {$ENDIF}; override;
 
         { Set new item value. }
-        procedure SetValue (AValue : T);
+        procedure SetValue (AValue : {$IFNDEF USE_OPTIONAL}T{$ELSE}
+          TOptionalValue{$ENDIF});
+
+        { Return current item iterator and move it to next. }
+        function GetCurrent : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue
+          {$ENDIF}; override;
       protected
         var
           { We cann't store pointer to list because generics in pascal it is
@@ -123,8 +142,14 @@ type
       public
         { Read/Write list item value. If value not exists raise 
           EValueNotExistsException. }
-        property Value : T read GetValue write SetValue;
+        property Value : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue{$ENDIF} 
+          read GetValue write SetValue;
+
+        property Current : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue{$ENDIF}
+          read GetCurrent;
       end;
+
+      TEnumerator = {$IFDEF FPC}specialize{$ENDIF} TEnumerator<T, TIterator>;
   public
     { Create new list. }
     constructor Create;
@@ -145,6 +170,10 @@ type
       number of entries removed from the list. }
     function Remove (AData : T) : Cardinal;
 
+    { Return true if container is empty. }
+    function IsEmpty : Boolean;
+      {$IFNDEF DEBUG}inline;{$ENDIF}
+
     { Retrive the first entry in a list. }
     function FirstEntry : TIterator;
 
@@ -162,6 +191,9 @@ type
 
     { Clear the list. }
     procedure Clear;
+
+    { Return enumerator for in operator. }
+    function GetEnumerator : TIterator;
   protected
     { Function used internally for sorting.  Returns the last entry in the new 
       sorted list }
@@ -171,18 +203,16 @@ type
       FFirstNode : PListEntry;
       FLastNode : PListEntry;     
       FLength : Cardinal;
-      FEqual : TListEqualCallback;
+      FCompareFunctor : BinaryCompareFunctor;
   public
     { Get List length. }
-    property Length : Cardinal read FLength; 
-
-    { List equal callback function }
-    property EqualCallback : TListEqualCallback read FEqual write FEqual; 
+    property Length : Cardinal read FLength;
   end;
 
 implementation
 
-constructor TList.TIterator.Create (APFirstNode : PPListEntry; APLastNode : 
+constructor TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.Create (APFirstNode : PPListEntry; APLastNode : 
   PPListEntry; APLength : PLongWord; AItem : PListEntry);
 begin
   FPFirstNode := APFirstNode;
@@ -191,12 +221,14 @@ begin
   FItem := AItem;
 end;
 
-function TList.TIterator.HasValue : Boolean;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.HasValue : Boolean;
 begin
   Result := FItem <> nil;
 end;
 
-function TList.TIterator.Prev : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.Prev : TIterator;
 begin
   if FItem = nil then
   begin
@@ -207,7 +239,8 @@ begin
   Result := TIterator.Create(FPFirstNode, FPLastNode, FPLength, FItem^.Prev);
 end;
 
-function TList.TIterator.Next : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.Next : TIterator;
 begin
   if FItem = nil then
   begin
@@ -218,7 +251,8 @@ begin
   Result := TIterator.Create(FPFirstNode, FPLastNode, FPLength, FItem^.Next);
 end;
 
-procedure TList.TIterator.Remove;
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.Remove;
 begin
   { If the entry is NULL, always fail }
   if FItem = nil then
@@ -259,7 +293,8 @@ begin
   FItem := nil;
 end;
 
-procedure TList.TIterator.InsertPrev (AData : T);
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.InsertPrev (AData : T);
 var
   NewItem : PListEntry;
 begin
@@ -284,7 +319,8 @@ begin
   Inc(FPLength^);
 end;
 
-procedure TList.TIterator.InsertNext (AData : T);
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.InsertNext (AData : T);
 var
   NewItem : PListEntry;
 begin
@@ -309,49 +345,86 @@ begin
   Inc(FPLength^);
 end;
 
-function TList.TIterator.GetValue : T;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.MoveNext : Boolean;
+begin
+  Result := FItem <> nil;
+end;
+
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.GetEnumerator : TIterator;
+begin
+  Result := TIterator.Create(FPFirstNode, FPLastNode, FPLength, FItem);
+end;
+
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.GetValue : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue{$ENDIF};
 begin
   if FItem = nil then
   begin
+    {$IFNDEF USE_OPTIONAL}
     raise EValueNotExistsException.Create('Value not exists.');
+    {$ELSE}
+    Exit(TOptionalValue.Create);
+    {$ENDIF}
   end;
 
-  Result := FItem^.Value;
+  Result := {$IFDEF USE_OPTIONAL}TOptionalValue.Create({$ENDIF}FItem^.Value
+    {$IFDEF USE_OPTIONAL}){$ENDIF};
 end;
 
-procedure TList.TIterator.SetValue (AValue : T);
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.SetValue (AValue : {$IFNDEF USE_OPTIONAL}T{$ELSE}
+  TOptionalValue{$ENDIF});
 begin
   if FItem <> nil then
   begin
-    FItem^.Value := AValue;
+    FItem^.Value := {$IFNDEF USE_OPTIONAL}AValue{$ELSE}AValue.Unwrap{$ENDIF};
   end;
 end;
 
-constructor TList.Create;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .TIterator.GetCurrent : {$IFNDEF USE_OPTIONAL}T{$ELSE}TOptionalValue{$ENDIF};
+begin
+  Result := GetValue;
+  FItem := FItem^.Next;
+end;
+
+constructor TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Create;
 begin
   FFirstNode := nil;
   FLastNode := nil;
   FLength := 0;
+  FCompareFunctor := BinaryCompareFunctor.Create;
 end;
 
-destructor TList.Destroy;
+destructor TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Destroy;
 begin
   Clear;  
 
   inherited Destroy;
 end;
 
-function TList.FirstEntry : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.GetEnumerator : 
+  TIterator;
+begin
+  Result := FirstEntry;
+end;
+
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.FirstEntry : 
+  TIterator;
 begin
   Result := TIterator.Create(@FFirstNode, @FLastNode, @FLength, FFirstNode);
 end;
 
-function TList.LastEntry : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.LastEntry : 
+  TIterator;
 begin
   Result := TIterator.Create(@FFirstNode, @FLastNode, @FLength, FLastNode);
 end;
 
-function TList.Prepend (AData : T) : Boolean;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Prepend (AData : 
+  T) : Boolean;
 var
   NewItem : PListEntry;
 begin
@@ -378,7 +451,8 @@ begin
   Result := True;
 end;
 
-function TList.Append (AData : T) : Boolean;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Append (AData : 
+  T) : Boolean;
 var
   NewItem : PListEntry;
 begin
@@ -404,7 +478,8 @@ begin
   Result := True;
 end;
 
-function TList.NthEntry (AIndex : Cardinal) : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.NthEntry (AIndex : 
+  Cardinal) : TIterator;
 var
   Entry : PListEntry;
   i : Cardinal;
@@ -427,7 +502,8 @@ begin
   Result := TIterator.Create(@FFirstNode, @FLastNode, @FLength, Entry);
 end;
 
-function TList.Remove (AData : T) : Cardinal;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Remove (AData : 
+  T) : Cardinal;
 var
   Iterator : TIterator;
 begin
@@ -441,7 +517,8 @@ begin
   end; 
 end;
 
-function TList.FindEntry (AData : T) : TIterator;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.FindEntry (AData : 
+  T) : TIterator;
 var
   Entry : PListEntry;
 begin  
@@ -450,7 +527,7 @@ begin
   Entry := FFirstNode;
   while (Entry <> nil) do
   begin
-    if Entry^.Value = AData then
+    if FCompareFunctor.Call(Entry^.Value, AData) = 0 then
     begin
       Result := TIterator.Create(@FFirstNode, @FLastNode, @FLength, Entry);
       Exit;
@@ -461,7 +538,13 @@ begin
   Result := TIterator.Create(@FFirstNode, @FLastNode, @FLength, nil);
 end;
 
-function TList.SortInternal (list : PPListEntry) : PListEntry;
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.IsEmpty : Boolean;
+begin
+  Result := (Length = 0);
+end;
+
+function TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}
+  .SortInternal (list : PPListEntry) : PListEntry;
 var
   pivot, rover : PListEntry;
   less_list, more_list : PListEntry;
@@ -494,8 +577,7 @@ begin
   begin
     next := rover^.Next;
 
-    if ((Assigned(FEqual) and FEqual(rover^.Value, pivot^.Value) < 0) or  
-      (rover^.Value < pivot^.Value) then
+    if FCompareFunctor.Call(rover^.Value, pivot^.Value) < 0 then
     begin
       { Place this in the less list }
       rover^.Prev := nil;
@@ -561,12 +643,12 @@ begin
   end;
 end;
 
-procedure TList.Sort;
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Sort;
 begin
   SortInternal(@FFirstNode);
 end;
 
-procedure TList.Clear;
+procedure TList{$IFNDEF FPC}<T, BinaryCompareFunctor>{$ENDIF}.Clear;
 var
   CurrItem, NextItem : PListEntry;
 begin
